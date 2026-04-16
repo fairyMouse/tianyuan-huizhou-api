@@ -37,7 +37,12 @@ export async function OPTIONS() {
   });
 }
 
+function roundMs(ms: number): number {
+  return Math.round(ms * 10) / 10;
+}
+
 export async function POST(req: NextRequest) {
+  const wallStart = performance.now();
   try {
     const body = await req.json();
     const base64 = body?.imageBase64 as string | undefined;
@@ -71,10 +76,46 @@ export async function POST(req: NextRequest) {
     // 1. 计算 MD5
     const md5 = crypto.createHash('md5').update(buffer).digest('hex');
     const cacheKey = `segment_cache/${md5}.png`;
+    const reqId = md5.slice(0, 8);
+
+    console.log(
+      JSON.stringify({
+        tag: 'segment_timing',
+        id: reqId,
+        step: 'request_ready',
+        sinceStartMs: roundMs(performance.now() - wallStart),
+        inputBytes: buffer.length,
+      }),
+    );
+
+    let last = performance.now();
+    const step = (name: string, extra?: Record<string, unknown>) => {
+      const n = performance.now();
+      const ms = roundMs(n - last);
+      last = n;
+      console.log(
+        JSON.stringify({
+          tag: 'segment_timing',
+          id: reqId,
+          step: name,
+          ms,
+          ...extra,
+        }),
+      );
+    };
 
     // 2. 查缓存
     const exists = await cosObjectExists(cacheKey);
+    step('cos_head_cache', { cacheHit: exists });
     if (exists) {
+      console.log(
+        JSON.stringify({
+          tag: 'segment_timing',
+          id: reqId,
+          outcome: 'ok_cached',
+          totalMs: roundMs(performance.now() - wallStart),
+        }),
+      );
       return NextResponse.json<SegmentSuccessResp>({
         ok: true,
         imageUrl: cosPublicUrl(cacheKey),
@@ -89,11 +130,21 @@ export async function POST(req: NextRequest) {
       ossImageUrl = await ossPutTempJpegPublicUrl(uploadKey, buffer);
     } catch (err) {
       console.error('[segment] OSS temp upload failed:', err);
+      console.log(
+        JSON.stringify({
+          tag: 'segment_timing',
+          id: reqId,
+          outcome: 'error',
+          at: 'oss_put_temp',
+          totalMs: roundMs(performance.now() - wallStart),
+        }),
+      );
       return NextResponse.json<SegmentErrorResp>(
         { ok: false, code: 'UPLOAD_FAILED', message: '原图上传失败' },
         { status: 500 },
       );
     }
+    step('oss_put_temp');
 
     // 4. 调用阿里云 SegmentCommodity
     let aliResultUrl: string;
@@ -101,6 +152,16 @@ export async function POST(req: NextRequest) {
       aliResultUrl = await segmentCommodity(ossImageUrl);
     } catch (err) {
       if (err instanceof SegmentError) {
+        console.log(
+          JSON.stringify({
+            tag: 'segment_timing',
+            id: reqId,
+            outcome: 'error',
+            at: 'imageseg_rpc',
+            code: err.code,
+            totalMs: roundMs(performance.now() - wallStart),
+          }),
+        );
         return NextResponse.json<SegmentErrorResp>(
           { ok: false, code: err.code, message: err.message },
           { status: 422 },
@@ -108,6 +169,7 @@ export async function POST(req: NextRequest) {
       }
       throw err;
     }
+    step('imageseg_rpc');
 
     // 5. 下载阿里云返回的 PNG
     let pngBuffer: Buffer;
@@ -119,11 +181,21 @@ export async function POST(req: NextRequest) {
       pngBuffer = Buffer.from(await resp.arrayBuffer());
     } catch (err) {
       console.error('[segment] download ali result failed:', err);
+      console.log(
+        JSON.stringify({
+          tag: 'segment_timing',
+          id: reqId,
+          outcome: 'error',
+          at: 'fetch_ali_png',
+          totalMs: roundMs(performance.now() - wallStart),
+        }),
+      );
       return NextResponse.json<SegmentErrorResp>(
         { ok: false, code: 'SEGMENT_API_FAILED', message: '抠图结果下载失败' },
         { status: 500 },
       );
     }
+    step('fetch_ali_png', { pngBytes: pngBuffer.length });
 
     // 6. 上传到 segment_cache/
     let cachedUrl: string;
@@ -131,11 +203,30 @@ export async function POST(req: NextRequest) {
       cachedUrl = await cosPutBuffer(cacheKey, pngBuffer, 'image/png');
     } catch (err) {
       console.error('[segment] upload cache failed:', err);
+      console.log(
+        JSON.stringify({
+          tag: 'segment_timing',
+          id: reqId,
+          outcome: 'error',
+          at: 'cos_put_cache',
+          totalMs: roundMs(performance.now() - wallStart),
+        }),
+      );
       return NextResponse.json<SegmentErrorResp>(
         { ok: false, code: 'UPLOAD_FAILED', message: '抠图结果存储失败' },
         { status: 500 },
       );
     }
+    step('cos_put_cache');
+
+    console.log(
+      JSON.stringify({
+        tag: 'segment_timing',
+        id: reqId,
+        outcome: 'ok_full',
+        totalMs: roundMs(performance.now() - wallStart),
+      }),
+    );
 
     return NextResponse.json<SegmentSuccessResp>({
       ok: true,
@@ -144,6 +235,15 @@ export async function POST(req: NextRequest) {
     });
   } catch (err: any) {
     console.error('[segment] unexpected:', err);
+    console.log(
+      JSON.stringify({
+        tag: 'segment_timing',
+        outcome: 'error',
+        at: 'unexpected',
+        totalMs: roundMs(performance.now() - wallStart),
+        message: err?.message,
+      }),
+    );
     return NextResponse.json<SegmentErrorResp>(
       { ok: false, code: 'SEGMENT_API_FAILED', message: err?.message || '未知错误' },
       { status: 500 },
