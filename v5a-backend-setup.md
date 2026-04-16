@@ -86,12 +86,12 @@ git commit -m "init: next.js skeleton"
 ## 2. 依赖安装
 
 ```bash
-pnpm add @alicloud/viapi20230117 @alicloud/openapi-client cos-nodejs-sdk-v5
+pnpm add @alicloud/openapi-client @alicloud/tea-util cos-nodejs-sdk-v5
 ```
 
-这三个包的作用:
-- `@alicloud/viapi20230117`: 阿里云视觉智能开放平台 SDK,含 SegmentCommodity
-- `@alicloud/openapi-client`: SDK 底层配置依赖
+这些包的作用:
+- `@alicloud/openapi-client`: 走 **POP RPC** 调用分割抠图 `SegmentCommodity` (商品分割在 **imageseg** 产品, npm 上的 `@alicloud/viapi20230117` 不含该接口,故不用 viapi SDK)
+- `@alicloud/tea-util`: `RuntimeOptions` 等运行时类型,`callApi` 需要
 - `cos-nodejs-sdk-v5`: 腾讯 COS Node SDK
 
 ---
@@ -103,10 +103,10 @@ pnpm add @alicloud/viapi20230117 @alicloud/openapi-client cos-nodejs-sdk-v5
 项目根目录新建 `.env.local`:
 
 ```bash
-# 阿里云 viapi (SegmentCommodity, 华东2上海)
+# 阿里云 SegmentCommodity (imageseg 华东2上海); 变量名仍用 ALIYUN_VIAPI_ENDPOINT
 ALIYUN_ACCESS_KEY_ID=<你的 RAM 子账号 AK ID>
 ALIYUN_ACCESS_KEY_SECRET=<你的 RAM 子账号 AK Secret>
-ALIYUN_VIAPI_ENDPOINT=viapi.cn-shanghai.aliyuncs.com
+ALIYUN_VIAPI_ENDPOINT=imageseg.cn-shanghai.aliyuncs.com
 
 # 腾讯 COS (复用已配置的 bucket)
 TENCENT_SECRET_ID=<你的腾讯云 SecretId>
@@ -197,17 +197,19 @@ export function cosPublicUrl(key: string): string {
 
 ### 4.2 SegmentCommodity 工具函数
 
-新建 `lib/segment.ts`:
+新建 `lib/segment.ts`,使用 `@alicloud/openapi-client` 的 **POP RPC** 调用 `SegmentCommodity` (`version: 2019-12-30`, `query.ImageURL`)。**不要**再引用 `@alicloud/viapi20230117`。
 
 ```typescript
-import viapi, * as $viapi from '@alicloud/viapi20230117';
+import Client from '@alicloud/openapi-client';
 import * as $OpenApi from '@alicloud/openapi-client';
+import * as $Util from '@alicloud/tea-util';
 
-const client = new viapi.default(
+const client = new Client(
   new $OpenApi.Config({
     accessKeyId: process.env.ALIYUN_ACCESS_KEY_ID!,
     accessKeySecret: process.env.ALIYUN_ACCESS_KEY_SECRET!,
     endpoint: process.env.ALIYUN_VIAPI_ENDPOINT!,
+    regionId: 'cn-shanghai',
   }),
 );
 
@@ -221,16 +223,32 @@ export class SegmentError extends Error {
 
 /**
  * 调用阿里云 SegmentCommodity, 返回阿里云临时 PNG URL
- * 注意: 阿里云返回的 URL 有效期 24h, 调用方需要立刻下载并转存
+ * 注意: 阿里云返回的 URL 有效期有限, 调用方需要立刻下载并转存
  */
 export async function segmentCommodity(imageUrl: string): Promise<string> {
-  const request = new $viapi.SegmentCommodityRequest({
-    imageURL: imageUrl,
+  const runtime = new $Util.RuntimeOptions({});
+  const req = new $OpenApi.OpenApiRequest({
+    query: {
+      ImageURL: imageUrl,
+    },
+  });
+  const params = new $OpenApi.Params({
+    action: 'SegmentCommodity',
+    version: '2019-12-30',
+    protocol: 'HTTPS',
+    pathname: '/',
+    method: 'POST',
+    authType: 'AK',
+    style: 'RPC',
+    reqBodyType: 'formData',
+    bodyType: 'json',
   });
 
   try {
-    const resp = await client.segmentCommodity(request);
-    const resultUrl = resp.body?.data?.imageURL;
+    const resp = await client.callApi(params, req, runtime);
+    const body = resp?.body ?? resp;
+    const data = body?.Data ?? body?.data;
+    const resultUrl = data?.ImageURL ?? data?.imageURL;
     if (!resultUrl) {
       throw new SegmentError('SEGMENT_NO_SUBJECT', '未识别到商品主体');
     }
@@ -241,35 +259,13 @@ export async function segmentCommodity(imageUrl: string): Promise<string> {
     if (code === 'InvalidImage.NoObject' || code === 'NoObjectDetected') {
       throw new SegmentError('SEGMENT_NO_SUBJECT', '未识别到商品主体');
     }
-    console.error('[segment] viapi call failed:', err);
-    throw new SegmentError('SEGMENT_API_FAILED', err?.message || 'viapi 调用失败');
+    console.error('[segment] SegmentCommodity POP call failed:', err);
+    throw new SegmentError('SEGMENT_API_FAILED', err?.message || 'SegmentCommodity 调用失败');
   }
 }
 ```
 
-**SDK 导入兼容性注意**:
-
-`@alicloud/viapi20230117` 的 TS 类型导出结构有时不稳定。如果 `pnpm dev` 启动报
-`SegmentCommodityRequest is not a constructor` 或 `segmentCommodity is not a function`,
-先跑一次:
-
-```bash
-node -e "const v = require('@alicloud/viapi20230117'); console.log(Object.keys(v)); console.log(Object.keys(v.default || {}))"
-```
-
-看实际导出结构后微调本文件的 import 写法。常见变体:
-
-```typescript
-// 变体 A (本文档主方案)
-import viapi, * as $viapi from '@alicloud/viapi20230117';
-
-// 变体 B
-import Viapi from '@alicloud/viapi20230117';
-import { SegmentCommodityRequest } from '@alicloud/viapi20230117';
-
-// 变体 C
-const Viapi = require('@alicloud/viapi20230117').default;
-```
+**Endpoint**: `ALIYUN_VIAPI_ENDPOINT` **取值**须为商品分割专属域名 `imageseg.cn-shanghai.aliyuncs.com`(与通用 viapi 网关 `viapi.cn-shanghai.aliyuncs.com` 不同)。
 
 ### 4.3 API Route
 
@@ -473,11 +469,11 @@ curl http://localhost:3000/api/health | jq
 
 ### 5.3 抠图测试
 
-准备一张电商风格的产品图 (比如一盒茶叶、一包香榧),命名 `test.jpg` 放在项目根目录。执行:
+准备一张电商风格的产品图 (比如一盒茶叶、一包香榧),命名 `test.jpg` 放在项目根目录或 `public/test.jpg`。执行:
 
 ```bash
-# macOS / Linux
-BASE64=$(base64 -i test.jpg | tr -d '\n')
+# macOS / Linux (示例: 使用 public/test.jpg)
+BASE64=$(base64 -i public/test.jpg | tr -d '\n')
 curl -X POST http://localhost:3000/api/segment \
   -H "Content-Type: application/json" \
   -d "{\"imageBase64\":\"$BASE64\"}" | jq
@@ -528,7 +524,7 @@ git push -u origin main
 |---|---|
 | `ALIYUN_ACCESS_KEY_ID` | 你的 AK ID |
 | `ALIYUN_ACCESS_KEY_SECRET` | 你的 AK Secret |
-| `ALIYUN_VIAPI_ENDPOINT` | `viapi.cn-shanghai.aliyuncs.com` |
+| `ALIYUN_VIAPI_ENDPOINT` | `imageseg.cn-shanghai.aliyuncs.com` |
 | `TENCENT_SECRET_ID` | 你的腾讯云 SecretId |
 | `TENCENT_SECRET_KEY` | 你的腾讯云 SecretKey |
 | `TENCENT_COS_BUCKET` | `tianyuan-huizhou-1258537429` |

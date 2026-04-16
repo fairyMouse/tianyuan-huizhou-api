@@ -50,3 +50,4 @@ export async function cosPutBuffer(
 export function cosPublicUrl(key: string): string {
   return `${CDN}/${key}`;
 }
+

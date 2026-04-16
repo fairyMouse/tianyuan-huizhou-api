@@ -5,6 +5,7 @@ import {
   cosPutBuffer,
   cosPublicUrl,
 } from '@/lib/cos';
+import { ossPutTempJpegPublicUrl } from '@/lib/oss-temp';
 import { segmentCommodity, SegmentError } from '@/lib/segment';
 
 export const runtime = 'nodejs';
@@ -81,13 +82,13 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // 3. 原图上传到 uploads_temp/
+    // 3. 原图上传到上海 OSS（SegmentCommodity 的 ImageURL 仅接受上海 OSS 标准域名，不支持 COS/CDN）
     const uploadKey = `uploads_temp/${md5}.jpg`;
-    let uploadUrl: string;
+    let ossImageUrl: string;
     try {
-      uploadUrl = await cosPutBuffer(uploadKey, buffer, 'image/jpeg');
+      ossImageUrl = await ossPutTempJpegPublicUrl(uploadKey, buffer);
     } catch (err) {
-      console.error('[segment] upload temp failed:', err);
+      console.error('[segment] OSS temp upload failed:', err);
       return NextResponse.json<SegmentErrorResp>(
         { ok: false, code: 'UPLOAD_FAILED', message: '原图上传失败' },
         { status: 500 },
@@ -97,7 +98,7 @@ export async function POST(req: NextRequest) {
     // 4. 调用阿里云 SegmentCommodity
     let aliResultUrl: string;
     try {
-      aliResultUrl = await segmentCommodity(uploadUrl);
+      aliResultUrl = await segmentCommodity(ossImageUrl);
     } catch (err) {
       if (err instanceof SegmentError) {
         return NextResponse.json<SegmentErrorResp>(

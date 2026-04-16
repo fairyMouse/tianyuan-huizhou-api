@@ -20,8 +20,8 @@ export class SegmentError extends Error {
 }
 
 /**
- * Call Alibaba SegmentCommodity; returns a temporary PNG URL (download and re-upload promptly).
- * The published @alicloud/viapi20230117 client has no segmentCommodity; this uses openapi-client POP RPC (same action/version/params as imageseg SDK).
+ * SegmentCommodity via Alibaba POP RPC (openapi-client).
+ * Response image URL is short-lived; download and persist immediately.
  */
 export async function segmentCommodity(imageUrl: string): Promise<string> {
   const runtime = new $Util.RuntimeOptions({});
@@ -57,7 +57,7 @@ export async function segmentCommodity(imageUrl: string): Promise<string> {
     if (code === 'InvalidImage.NoObject' || code === 'NoObjectDetected') {
       throw new SegmentError('SEGMENT_NO_SUBJECT', '未识别到商品主体');
     }
-    console.error('[segment] viapi call failed:', err);
-    throw new SegmentError('SEGMENT_API_FAILED', err?.message || 'viapi 调用失败');
+    console.error('[segment] SegmentCommodity POP call failed:', err);
+    throw new SegmentError('SEGMENT_API_FAILED', err?.message || 'SegmentCommodity 调用失败');
   }
 }
