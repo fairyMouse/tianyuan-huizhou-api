@@ -6,6 +6,7 @@ import {
   cosPublicUrl,
 } from '@/lib/cos';
 import { ossPutTempJpegPublicUrl } from '@/lib/oss-temp';
+import { floodTransparentBorderMatte } from '@/lib/segment-png-alpha';
 import { segmentCommodity, SegmentError } from '@/lib/segment';
 
 export const runtime = 'nodejs';
@@ -75,7 +76,7 @@ export async function POST(req: NextRequest) {
 
     // 1. 计算 MD5
     const md5 = crypto.createHash('md5').update(buffer).digest('hex');
-    const cacheKey = `segment_cache/${md5}.png`;
+    const cacheKey = `segment_cache/${md5}_rgba.png`;
     const reqId = md5.slice(0, 8);
 
     console.log(
@@ -197,10 +198,19 @@ export async function POST(req: NextRequest) {
     }
     step('fetch_ali_png', { pngBytes: pngBuffer.length });
 
+    let outPng: Buffer;
+    try {
+      outPng = await floodTransparentBorderMatte(pngBuffer);
+    } catch (err) {
+      console.error('[segment] png alpha post-process failed:', err);
+      outPng = pngBuffer;
+    }
+    step('png_alpha_post');
+
     // 6. 上传到 segment_cache/
     let cachedUrl: string;
     try {
-      cachedUrl = await cosPutBuffer(cacheKey, pngBuffer, 'image/png');
+      cachedUrl = await cosPutBuffer(cacheKey, outPng, 'image/png');
     } catch (err) {
       console.error('[segment] upload cache failed:', err);
       console.log(

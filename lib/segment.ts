@@ -28,6 +28,8 @@ export async function segmentCommodity(imageUrl: string): Promise<string> {
   const req = new $OpenApi.OpenApiRequest({
     query: {
       ImageURL: imageUrl,
+      /** Tight bbox; default is full-frame RGBA PNG */
+      ReturnForm: 'crop',
     },
   });
   const params = new $OpenApi.Params({

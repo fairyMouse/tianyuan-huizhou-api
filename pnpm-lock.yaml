@@ -29,6 +29,9 @@ importers:
       react-dom:
         specifier: 19.2.4
         version: 19.2.4(react@19.2.4)
+      sharp:
+        specifier: ^0.34.5
+        version: 0.34.5
     devDependencies:
       '@types/ali-oss':
         specifier: ^6.23.3
@@ -1026,8 +1029,7 @@ snapshots:
       tslib: 2.8.1
     optional: true
 
-  '@img/colour@1.1.0':
-    optional: true
+  '@img/colour@1.1.0': {}
 
   '@img/sharp-darwin-arm64@0.34.5':
     optionalDependencies:
@@ -1319,8 +1321,7 @@ snapshots:
 
   destroy@1.2.0: {}
 
-  detect-libc@2.1.2:
-    optional: true
+  detect-libc@2.1.2: {}
 
   digest-header@1.1.0: {}
 
@@ -1696,7 +1697,6 @@ snapshots:
       '@img/sharp-win32-arm64': 0.34.5
       '@img/sharp-win32-ia32': 0.34.5
       '@img/sharp-win32-x64': 0.34.5
-    optional: true
 
   sm3@1.0.3: {}
 
